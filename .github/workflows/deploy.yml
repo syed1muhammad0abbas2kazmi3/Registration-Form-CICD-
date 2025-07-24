@@ -1,0 +1,60 @@
+name: Deploy on EC2 via SSM
+
+on:
+  push:
+    branches:
+      - dev
+      - qa
+    paths:
+      - 'app/Registration-Form-CICD-/frontend/**'
+      - 'app/Registration-Form-CICD-/backend/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      INSTANCE_ID_DEV: ${{ secrets.EC2_INSTANCE_ID_DEV }}
+      INSTANCE_ID_QA: ${{ secrets.EC2_INSTANCE_ID_QA }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up AWS CLI
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1  # update if using another region
+
+      - name: Determine changes
+        id: changes
+        run: |
+          echo "BACKEND_CHANGED=false" >> $GITHUB_ENV
+          echo "FRONTEND_CHANGED=false" >> $GITHUB_ENV
+          git fetch origin ${{ github.event.before }}
+          git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep "frontend/" && echo "FRONTEND_CHANGED=true" >> $GITHUB_ENV || true
+          git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep "backend/" && echo "BACKEND_CHANGED=true" >> $GITHUB_ENV || true
+
+      - name: Deploy Frontend
+        if: env.FRONTEND_CHANGED == 'true'
+        run: |
+          INSTANCE_ID=${{ github.ref == 'refs/heads/dev' && secrets.EC2_INSTANCE_ID_DEV || secrets.EC2_INSTANCE_ID_QA }}
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploying Frontend" \
+            --parameters commands=["bash ~/scripts/deploy-frontend.sh"] \
+            --region us-east-1
+
+      - name: Deploy Backend
+        if: env.BACKEND_CHANGED == 'true'
+        run: |
+          INSTANCE_ID=${{ github.ref == 'refs/heads/dev' && secrets.EC2_INSTANCE_ID_DEV || secrets.EC2_INSTANCE_ID_QA }}
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploying Backend" \
+            --parameters commands=["bash ~/scripts/deploy-backend.sh"] \
+            --region us-east-1
