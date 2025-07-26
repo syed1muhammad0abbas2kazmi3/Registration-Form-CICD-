@@ -1,8 +1,9 @@
-name: Deploy App via SSM
+name: Deploy to EC2 via SSM
 
 on:
   push:
     branches:
+      - main
       - dev
       - qa
     paths:
@@ -11,50 +12,61 @@ on:
 
 jobs:
   deploy:
-    name: Deploy via AWS SSM
     runs-on: ubuntu-latest
+
+    env:
+      INSTANCE_ID_DEV: ${{ secrets.EC2_INSTANCE_ID_DEV }}
+      INSTANCE_ID_QA: ${{ secrets.EC2_INSTANCE_ID_QA }}
+      INSTANCE_ID_MAIN: ${{ secrets.EC2_INSTANCE_ID_MAIN }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          region: us-east-1 # Change to your AWS region
+          aws-region: us-east-1  # Change if you're in a different region
 
-      - name: Detect changed files
+      - name: Detect Changes
         id: changes
         run: |
-          echo "CHANGED_FRONTEND=false" >> $GITHUB_ENV
-          echo "CHANGED_BACKEND=false" >> $GITHUB_ENV
+          echo "FRONTEND_CHANGED=false" >> $GITHUB_ENV
+          echo "BACKEND_CHANGED=false" >> $GITHUB_ENV
+          git fetch origin ${{ github.event.before }}
+          git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep "^frontend/" && echo "FRONTEND_CHANGED=true" >> $GITHUB_ENV || true
+          git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep "^backend/" && echo "BACKEND_CHANGED=true" >> $GITHUB_ENV || true
 
-          if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -q '^frontend/'; then
-            echo "CHANGED_FRONTEND=true" >> $GITHUB_ENV
+      - name: Set Instance ID
+        id: set-instance
+        run: |
+          BRANCH=$(echo "${{ github.ref }}" | awk -F'/' '{print $3}')
+          if [[ "$BRANCH" == "main" ]]; then
+            echo "INSTANCE_ID=${{ secrets.EC2_INSTANCE_ID_MAIN }}" >> $GITHUB_ENV
+          elif [[ "$BRANCH" == "dev" ]]; then
+            echo "INSTANCE_ID=${{ secrets.EC2_INSTANCE_ID_DEV }}" >> $GITHUB_ENV
+          elif [[ "$BRANCH" == "qa" ]]; then
+            echo "INSTANCE_ID=${{ secrets.EC2_INSTANCE_ID_QA }}" >> $GITHUB_ENV
           fi
 
-          if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -q '^backend/'; then
-            echo "CHANGED_BACKEND=true" >> $GITHUB_ENV
-          fi
-
-      - name: Deploy frontend via SSM
-        if: env.CHANGED_FRONTEND == 'true'
+      - name: Deploy Frontend
+        if: env.FRONTEND_CHANGED == 'true'
         run: |
           aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --targets "Key=instanceIds,Values=${{ secrets.EC2_INSTANCE_ID_DEV }}" \
-            --comment "Frontend deployment" \
-            --parameters 'commands=["bash ~/scripts/deploy-frontend.sh"]' \
-            --output text
+            --comment "Deploying Frontend" \
+            --parameters commands=["bash ~/scripts/deploy-frontend.sh"] \
+            --region us-east-1
 
-      - name: Deploy backend via SSM
-        if: env.CHANGED_BACKEND == 'true'
+      - name: Deploy Backend
+        if: env.BACKEND_CHANGED == 'true'
         run: |
           aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --targets "Key=instanceIds,Values=${{ secrets.EC2_INSTANCE_ID_DEV }}" \
-            --comment "Backend deployment" \
-            --parameters 'commands=["bash ~/scripts/deploy-backend.sh"]' \
-            --output text
+            --comment "Deploying Backend" \
+            --parameters commands=["bash ~/scripts/deploy-backend.sh"] \
+            --region us-east-1
