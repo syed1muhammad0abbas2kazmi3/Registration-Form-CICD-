@@ -1,4 +1,4 @@
-name: Deploy on EC2 via SSM
+name: Deploy on EC2 via SSm
 
 on:
   push:
