@@ -10,6 +10,9 @@ on:
       - 'frontend/**'
       - 'backend/**'
 
+  workflow_dispatch:  # <-- Add this line
+
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
